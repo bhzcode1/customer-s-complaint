@@ -34,6 +34,7 @@ def show(title, sql):
 # --- Step 1: download once -------------------------------------------------
 if not LOCAL.exists():
     LOCAL.parent.mkdir(parents=True, exist_ok=True)
+    part = LOCAL.with_suffix(".part")  # an interrupted run leaves this, not a fake LOCAL
     print("Counting rows in the mirror (reads file footers only)...")
     print(f"  total rows in mirror: {one(f'SELECT count(*) FROM {SOURCE!r}')[0]:,}")
     print("Pulling rows with a narrative (~1 GB download, takes a while)...")
@@ -43,8 +44,9 @@ if not LOCAL.exists():
                    consumer_complaint_narrative AS narrative
             FROM {SOURCE!r}
             WHERE trim(coalesce(consumer_complaint_narrative, '')) <> ''
-        ) TO '{LOCAL.as_posix()}' (FORMAT parquet, COMPRESSION zstd)
+        ) TO '{part.as_posix()}' (FORMAT parquet, COMPRESSION zstd)
     """)
+    part.replace(LOCAL)  # only a finished download gets the real name
 
 con.execute(f"CREATE VIEW n AS SELECT * FROM '{LOCAL.as_posix()}'")
 
