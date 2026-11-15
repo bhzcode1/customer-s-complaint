@@ -39,8 +39,34 @@ uv run python data/check_data.py
 ```
 (On Windows, set `PYTHONUTF8=1` if the console throws a `UnicodeEncodeError`.)
 
-**Results** (run 2026-11-14)
-_pending_
+**Results** (run 2026-11-15)
+
+| Measure | Value |
+|---|---|
+| Rows in mirror | 16,558,052 |
+| Rows with a narrative | 3,815,251 (local file 681 MB) |
+| Unique narratives, exact | 2,564,072 (32.8% duplicates) |
+| Unique narratives, loose | 2,389,678 (37.4% duplicates) |
+| Date range | 2015-03-19 to 2026-06-17; 45,040 rows (1.2%) have no date |
+| Busiest years | 2025: 1.22M, 2024: 0.81M, 2023: 0.44M |
+| Length (words) | p10 33, median 117, p90 367 |
+| Contains a dollar amount (`{$500.00}`) | 22.0% |
+| Contains a full date | 0.0% |
+| Contains a date with only the year kept (`XX/XX/2024`) | 7.9% |
+
+**Gate: PASS.** 2.39M unique narratives vs 50,000 needed, about 48 times the threshold.
+
+**What this changes in later phases**
+- **`key_dates` cannot work as planned.** The CFPB removes the day and month from every
+  date. A written-out month is just as rare (0.03%), and only the year survives in 7.9% of rows. Phase 3 must replace
+  this field (for example, `years_mentioned`) or drop it. Decide in phase 3.
+- **`amount_in_dispute` will be null for about 78% of rows.** Accuracy must be reported
+  separately for "has an amount" and "has none", or a model that always answers null looks good.
+- **Credit reporting appears under two product names** (43.8% + 21.2% = 65%): the CFPB renamed
+  the category. Phase 2 must merge renamed products before balancing.
+- **37% of the text is duplicates**, mostly templates. Phase 2 near-duplicate removal is required, not optional.
+- **Rows with no date** cannot go into a date-based split; phase 2 drops them.
+- The mirror ends in June 2026, two months before the CFPB stopped publishing narratives.
 
 **Interview question**
 "Why not just load the CSV into pandas?" — 16.6M rows of free text do not fit in 8 GB RAM;

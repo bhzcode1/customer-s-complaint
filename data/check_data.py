@@ -83,11 +83,12 @@ show("narrative length in words (p10, median, p90):", r"""
 
 # Can the planned fields be extracted at all? CFPB redacts personal details,
 # so check how often amounts and dates survive in the text.
-show("share of narratives containing (amount $, any date, unredacted date):", r"""
+show("share of narratives with (amount, any date, full date, date with only year kept):", r"""
     SELECT
       round(100.0 * avg(regexp_matches(narrative, '\$\s?\d')::INT), 1) || '%',
       round(100.0 * avg(regexp_matches(narrative, '\d{1,2}/\d{1,2}/\d{2,4}|XX/XX/')::INT), 1) || '%',
-      round(100.0 * avg(regexp_matches(narrative, '\b\d{1,2}/\d{1,2}/\d{2,4}\b')::INT), 1) || '%'
+      round(100.0 * avg(regexp_matches(narrative, '\b\d{1,2}/\d{1,2}/\d{2,4}\b')::INT), 1) || '%',
+      round(100.0 * avg(regexp_matches(narrative, 'XX/XX/(19|20)\d\d')::INT), 1) || '%'
     FROM n
 """)
 
