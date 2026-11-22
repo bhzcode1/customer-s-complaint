@@ -5,5 +5,11 @@ description = "Extract structured facts from consumer complaint text with a smal
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "datasketch>=2.0.0",
     "duckdb>=2.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
 ]
