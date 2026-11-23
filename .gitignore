@@ -4,3 +4,4 @@ data/raw/
 data/tmp/
 data/processed/
 data/labels/
+data/predictions/

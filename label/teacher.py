@@ -123,7 +123,7 @@ def run(rows, out, ask, model, workers=8):
             valid += rec["label"] is not None
             failed += rec["label"] is None
             if i % 50 == 0 or i == len(todo):
-                rate = i / (time.time() - start)
+                rate = i / max(time.time() - start, 1e-6)  # Windows clock can show 0 s elapsed
                 print(f"  {i:,}/{len(todo):,}  failed {failed}  {rate:.2f} rows/s", flush=True)
     return valid, failed
 

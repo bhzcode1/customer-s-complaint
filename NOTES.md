@@ -46,6 +46,9 @@ label/lengths.py     phase 3: token counts for the length cap
 label/gold.py        phase 3: blind hand-labelling of 200 val rows + scoring against them
 data/gold/           val_gold.jsonl, hand labels (in git: small and not reproducible)
 notebooks/label_kaggle.ipynb  phase 3: full labelling run with vLLM on a free Kaggle GPU
+eval/rules.py        phase 4: keyword/regex baseline
+eval/evaluate.py     phase 4: scores any predictions file
+data/predictions/    model and baseline outputs, JSONL (not in git)
 tests/               pytest tests
 NOTES.md             this file
 ```
@@ -263,6 +266,41 @@ uv run python label/gold.py score data/labels/val.jsonl
 
 **Still to do:** run the notebook on val, hand-label the gold set, score the teacher on it
 (this sets the ceiling for the student), then label train.
+
+## Phase 4: Baselines and evaluation (started early, while labels are pending)
+
+**What was built so far**
+- `eval/evaluate.py`: scores a predictions JSONL (same format as the teacher's labels).
+  `product_group` is always scored against the CFPB's own product, which is known for every row,
+  so it needs no labels. Every field is scored against the gold set when it exists, and against
+  the teacher's labels with `--ref`. Macro-F1 for `issue` and `requested_resolution`; amount
+  split into "has amount" / "no amount".
+- `eval/rules.py`: baseline (a), keywords and regexes only: product by keyword counts, issue and
+  resolution by ordered regex rules, company from a list of ~55 common names, first `{$...}`
+  amount, "I called/wrote/disputed..." for contacted. `tests/test_eval.py`: 3 tests.
+
+**Results so far** (val, 5,000 rows, 2026-11-23)
+
+| Baseline | product_group accuracy vs CFPB | macro-F1 |
+|---|---|---|
+| rules | 51.2% | 50.9% |
+
+Other fields wait for the gold set and teacher labels.
+
+**Findings**
+- **41% of val complaints contain a dollar amount** (rules found one in 2,044 of 5,000), against
+  22% over all years in phase 1. The "has amount" group is larger in recent data.
+- The rules leave `company` null in 66% of rows: names outside the list are missed, so this is a
+  weak floor for that field.
+
+**Run**
+```
+uv run python eval/rules.py --split val
+uv run python eval/evaluate.py data/predictions/rules_val.jsonl [--ref data/labels/val.jsonl]
+```
+
+**Still to do:** baseline (b), the small base model with a prompt and no fine-tuning;
+baseline (c), the teacher itself vs gold; the comparison table.
 
 ## Roadmap: phases 3 to 10 (planned, not built yet)
 
