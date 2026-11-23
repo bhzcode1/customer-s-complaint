@@ -39,12 +39,20 @@ data/check_data.py   phase 1: download + data check
 data/prep.py         phase 2: clean, dedupe, split, sample
 data/raw/            narratives.parquet (not in git)
 data/processed/      train / val / replay parquet (not in git)
+data/labels/         teacher labels, JSONL (not in git)
+label/schema.py      phase 3: label fields, JSON Schema, validator
+label/teacher.py     phase 3: label complaints via an OpenAI-compatible server
+label/lengths.py     phase 3: token counts for the length cap
+label/gold.py        phase 3: blind hand-labelling of 200 val rows + scoring against them
+data/gold/           val_gold.jsonl, hand labels (in git: small and not reproducible)
+notebooks/label_kaggle.ipynb  phase 3: full labelling run with vLLM on a free Kaggle GPU
 tests/               pytest tests
 NOTES.md             this file
 ```
 
-**Status (2026-11-22).** Phases 1 and 2 are done. Phase 3 is next. The plan for phases 3 to 10 is
-at the end of this file.
+**Status (2026-11-23).** Phases 1 and 2 are done. Phase 3 is in progress: schema, labelling
+script and length cap are done; the full labelling run and gold set are not. The plan for
+phases 3 to 10 is at the end of this file.
 
 ## Phase 1: Setup and data check (gate)
 
@@ -199,6 +207,63 @@ val 170, replay 188 (p90 about 450 in all three).
 mixes the same period's templates into train and test and inflates the score; a date split,
 plus keeping the earliest copy of any duplicate in train, measures what happens after deployment.
 
+## Phase 3: Schema and labels (in progress)
+
+**What was built so far**
+- `label/schema.py`: the six label fields, a JSON Schema for constrained output, and `validate()`,
+  an independent check run on every answer.
+- `label/teacher.py`: sends each complaint to any OpenAI-compatible chat server (vLLM, llama.cpp,
+  Ollama) at temperature 0, retries an invalid answer once, appends one JSONL line per complaint
+  (raw answer, parsed label, errors, model, prompt version, time).
+- `label/lengths.py`: token counts per split. `tests/test_label.py`: 10 tests with a fake model.
+- `label/gold.py`: 200 val rows (20 per product group, fixed md5 order) for hand-labelling.
+  **Blind**: the teacher's answer is never shown, so it cannot anchor the person checking.
+  `score` reports per-field accuracy, amount split into "has amount" / "no amount", and company
+  compared with `company_key()` (lowercase, no punctuation or legal suffixes: "Capital One, N.A."
+  = "capital one"). Phase 4's evaluation reuses the same scoring.
+- `notebooks/label_kaggle.ipynb`: clones the repo, starts vLLM (T4 x2, fp16, default
+  Qwen2.5-14B-Instruct-AWQ, 7B fallback), runs a 20-row smoke test, then the full split, and
+  copies the JSONL to the notebook output. **Not run yet**, so model fit and speed on T4 are untested.
+
+**Decisions**
+- **Teacher = an open model, no paid API** (decided 2026-11-23). This laptop (2-core i3, no usable
+  GPU) labels at ~16 s per complaint even with a 1.5B model, so 25k rows would take ~110 hours,
+  and a 1.5B teacher is no better than the student. The full run goes on a free cloud GPU
+  (Kaggle/Colab) with a 7B+ model served by vLLM; the laptop is only for smoke tests.
+- **`years_mentioned` replaced by `company`.** From 2024 the CFPB redacts the year too
+  (`XX/XX/year>`). Share of complaints with any 4-digit year: ~26% in 2018-2021, 15% in 2023,
+  3.7% in 2025 (val), 5.9% in 2026 (replay). An always-empty answer would score ~95%. Company
+  names are not redacted in most complaints and matter for routing. A redacted name (`XXXX`)
+  or "CFPB" is rejected by the validator; the answer must be null instead.
+- **Length cap: 600 words** (`MAX_WORDS`). Tokens (Qwen2.5 tokenizer, ~1.3 per word): median
+  ~200, p90 ~575, p99 ~1,500, max ~10,600. 600 words cuts ~5% of rows. The teacher sees the same
+  truncated text as the student, so labels never rely on text the student cannot read.
+- **Resume only counts labels from the same model and prompt version**, so smoke-test labels
+  can never stand in for real ones. Bump `PROMPT_VERSION` when the prompt or schema changes.
+- `issue` has 13 categories, `requested_resolution` 5 plus null (see `schema.py`); drafted from
+  the roadmap and adjusted after reading 30 val complaints (added `service_problem`).
+
+**Smoke test** (2026-11-23, Qwen2.5-1.5B Q4 on CPU via llama.cpp, 5 val rows): 5/5 valid JSON,
+so the plumbing works. Quality was poor (product right 2/5, `XXXX` and `CFPB` given as company,
+one invented amount), which is why the company check was added and why the teacher must be larger.
+
+**Run**
+```
+uv run python label/lengths.py
+# start an OpenAI-compatible server, then:
+uv run python label/teacher.py --split val --limit 20 --base-url http://localhost:8080/v1 \
+    --model <name> --out data/labels/smoke/val.jsonl
+```
+
+Gold set and scoring:
+```
+uv run python label/gold.py annotate                      # resumable; Ctrl+C saves
+uv run python label/gold.py score data/labels/val.jsonl
+```
+
+**Still to do:** run the notebook on val, hand-label the gold set, score the teacher on it
+(this sets the ceiling for the student), then label train.
+
 ## Roadmap: phases 3 to 10 (planned, not built yet)
 
 Drafted 2026-11-22 from the findings above. The original plan was not saved in this repo, so
@@ -210,10 +275,10 @@ this is a proposal: change it as decisions are made. Each phase gets its full no
   - `product_group`: one of the 10 groups (already known, so it doubles as a sanity check).
   - `issue`: short category, e.g. wrong balance, unauthorised charge, harassment, not on report.
   - `amount_in_dispute`: number or null (null in about 78% of rows).
-  - `years_mentioned`: list of years. Replaces `key_dates`, because day and month are redacted.
+  - ~~`years_mentioned`~~ replaced by `company` (see the phase 3 section: years are redacted from 2024).
   - `contacted_company_first`: true/false/null.
   - `requested_resolution`: refund, correction, deletion, stop contact, other, or null.
-- **Label with a large hosted LLM** (the "teacher"): train 20k + val 5k. Store the raw response,
+- **Label with a large open LLM on a free cloud GPU** (the "teacher"): train 20k + val 5k. Store the raw response,
   the parsed JSON, and the model version, so labels can be rebuilt and checked.
 - **Gold set:** hand-check about 200 val rows. Teacher accuracy on these sets the ceiling the small model can reach.
 - **Length decision:** count tokens, then cap or truncate the longest complaints (p90 about 450 words).
