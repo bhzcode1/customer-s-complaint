@@ -225,8 +225,10 @@ plus keeping the earliest copy of any duplicate in train, measures what happens 
   compared with `company_key()` (lowercase, no punctuation or legal suffixes: "Capital One, N.A."
   = "capital one"). Phase 4's evaluation reuses the same scoring.
 - `notebooks/label_kaggle.ipynb`: clones the repo, starts vLLM (T4 x2, fp16, default
-  Qwen2.5-14B-Instruct-AWQ, 7B fallback), runs a 20-row smoke test, then the full split, and
-  copies the JSONL to the notebook output. **Not run yet**, so model fit and speed on T4 are untested.
+  Qwen2.5-14B-Instruct-AWQ, 7B fallback), runs a 20-row smoke test, then the full split. The
+  same session also runs phase 4 baseline (b) (see below) and copies labels and predictions to
+  the notebook output. Each model gets its own server, stopped before the next starts.
+  **Not run yet**, so model fit and speed on T4 are untested.
 
 **Decisions**
 - **Teacher = an open model, no paid API** (decided 2026-11-23). This laptop (2-core i3, no usable
@@ -299,8 +301,13 @@ uv run python eval/rules.py --split val
 uv run python eval/evaluate.py data/predictions/rules_val.jsonl [--ref data/labels/val.jsonl]
 ```
 
-**Still to do:** baseline (b), the small base model with a prompt and no fine-tuning;
-baseline (c), the teacher itself vs gold; the comparison table.
+**Baseline (b), prepared:** the candidate students (Qwen2.5-0.5B and 1.5B Instruct) get the
+teacher's exact prompt and schema, with no fine-tuning, via `teacher.py --out data/predictions/...`.
+It runs in the Kaggle notebook (minutes on a T4; ~22 hours on this laptop's CPU). Same prompt =
+any gap after fine-tuning is due to training, not prompt changes. The two sizes also inform the
+phase 5 choice of student.
+
+**Still to do:** run baseline (b); baseline (c), the teacher itself vs gold; the comparison table.
 
 ## Roadmap: phases 3 to 10 (planned, not built yet)
 
