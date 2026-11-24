@@ -12,30 +12,45 @@ PRODUCT_GROUPS = [
 ]
 
 # What went wrong. One label: the main problem, not every problem mentioned.
+# Descriptions and rules below are prompt v2 (2026-11-24): v1 left overlaps open, and the 14B
+# teacher agreed with the gold set on only 52% of issues (see NOTES, phase 3).
 ISSUES = {
-    "incorrect_information": "wrong or outdated information on a credit report or account (balance, status, late payment)",
-    "not_mine_identity_theft": "account, inquiry or charge the person says is not theirs, or identity theft",
-    "unauthorized_transaction": "money taken or charged without permission from the person's own account, or a scam",
-    "debt_not_owed": "collector seeks a debt the person says is paid, wrong amount, or not theirs to pay",
-    "collection_tactics": "calls, threats, harassment or no validation notice from a collector",
-    "fees_interest": "unexpected or excessive fees, interest or charges",
-    "payment_problem": "payment not applied, misapplied, delayed or refused",
-    "account_access": "account frozen, closed, funds held, cannot log in or withdraw",
-    "loan_servicing": "loan modification, forbearance, escrow, payoff, repayment plan or forgiveness",
-    "dispute_handling": "company did not investigate or respond properly to a dispute",
-    "application_denied": "application, loan or account opening refused or delayed",
-    "service_problem": "company unresponsive, gives conflicting information, or will not provide documents or a service (outside a formal dispute)",
-    "other": "anything that fits none of the above",
+    "not_mine_identity_theft": "an account, loan, collection or hard inquiry the person says they never opened or authorized, or identity theft",
+    "unauthorized_transaction": "money taken from or charged to the person's own account without permission, or sent because of a scam or impersonation",
+    "debt_not_owed": "a collector or lender seeks a debt the person says is already paid, the wrong amount, or discharged",
+    "collection_tactics": "collector calls, texts, threats, lawsuits, or a debt validation request that was not answered",
+    "incorrect_information": "wrong or outdated information about an account the person accepts as theirs (balance, status, late payments, personal details), on a credit report or statement",
+    "dispute_handling": "a dispute with a merchant or seller (chargeback, item not received or damaged) that the company rejected or mishandled",
+    "fees_interest": "unexpected or excessive fees, interest, or charges",
+    "payment_problem": "a payment not applied, misapplied, misdirected, delayed, or refused",
+    "account_access": "an account frozen, restricted or closed, funds held, or the person cannot log in or withdraw",
+    "loan_servicing": "escrow, insurance, loan modification, forbearance, repayment plan, payoff, transfer between servicers, or forgiveness",
+    "application_denied": "an application for a loan, card or account refused, delayed, or changed",
+    "service_problem": "only if nothing above fits: rude or unresponsive service, refusal to provide documents",
+    "other": "fits none of the above",
 }
 
-# What the person wants done. null = they do not say.
+ISSUE_RULES = """If several apply, use the FIRST that fits in this order:
+  1. not_mine_identity_theft  2. unauthorized_transaction  3. debt_not_owed  4. collection_tactics
+  5. incorrect_information  6. dispute_handling  7. fees_interest  8. payment_problem
+  9. account_access  10. loan_servicing  11. application_denied  12. service_problem  13. other
+  A scam or fraud loss is unauthorized_transaction even when the bank then denied the claim.
+  A credit report entry the person does not recognize is not_mine_identity_theft, not incorrect_information."""
+
+# What the person explicitly asks for. null = no outcome is asked for.
 RESOLUTIONS = {
-    "refund": "money back, reversed charge or fee, compensation",
-    "correction": "fix wrong information or account details",
-    "deletion": "remove an item, account or inquiry from a report",
-    "stop_contact": "stop calls, letters or collection",
-    "other": "some other concrete outcome (e.g. loan modification, unfreeze account)",
+    "refund": "money back, a charge or fee reversed, funds released, or compensation",
+    "deletion": "remove, delete or block an item, account, inquiry or late mark from a report",
+    "correction": "fix information that stays on the account or report (balance, status, name, address)",
+    "stop_contact": "stop calls, letters, collection activity or a lawsuit",
+    "other": "another concrete outcome (e.g. reinstate an account, change a payment plan, cancel a loan)",
 }
+
+RESOLUTION_RULES = """Only an outcome the person explicitly asks for, now or earlier ("I want", "please remove",
+  "I requested a refund", "stop calling me"); filing a dispute or fraud claim to get money back counts
+  as refund. Do not infer what they would probably want. Asking only for an investigation, an
+  explanation, or documents is null. If they ask for several outcomes, use the first in this order:
+  refund, deletion, correction, stop_contact, other."""
 
 FIELDS = ["product_group", "issue", "company", "amount_in_dispute",
           "contacted_company_first", "requested_resolution"]

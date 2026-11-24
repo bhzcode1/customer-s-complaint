@@ -22,12 +22,14 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).parent))
-from schema import ISSUES, JSON_SCHEMA, NOT_COMPANIES, PRODUCT_GROUPS, RESOLUTIONS, normalise, validate  # noqa: E402
+from schema import (ISSUE_RULES, ISSUES, JSON_SCHEMA, NOT_COMPANIES, PRODUCT_GROUPS, RESOLUTION_RULES,  # noqa: E402
+                    RESOLUTIONS, normalise, validate)  # noqa: E402
 
 ROOT = Path(__file__).parent.parent
 PROCESSED = ROOT / "data" / "processed"
 LABELS = ROOT / "data" / "labels"
-PROMPT_VERSION = "v1"   # bump when the prompt or schema changes; stored on every label
+PROMPT_VERSION = "v2"   # bump when the prompt or schema changes; stored on every label
+                        # v2 (2026-11-24): issue precedence rules, explicit-only resolution
 MAX_WORDS = 600         # ~5% of rows are longer (p99 ~1,500 tokens); teacher and student see the same cut
 
 bullets = lambda d: "\n".join(f"  - {k}: {v}" for k, v in d.items())
@@ -40,6 +42,7 @@ Fields:
 - product_group: one of {", ".join(PRODUCT_GROUPS)}.
 - issue: the main problem, one of:
 {bullets(ISSUES)}
+  {ISSUE_RULES}
 - company: the company the complaint is against (e.g. "Capital One", "Mohela"), as written in the text,
   or null if its name is redacted (XXXX) or not given. Never "XXXX" and never the CFPB (the complaint is
   filed with the CFPB, not against it). If several companies, the one the person blames most.
@@ -49,7 +52,7 @@ Fields:
   (called, wrote, disputed with them); false if they say they did not; null if the text does not say.
 - requested_resolution: what the person asks for, one of:
 {bullets(RESOLUTIONS)}
-  or null if they do not ask for anything specific."""
+  or null. {RESOLUTION_RULES}"""
 
 
 def truncate(text, max_words=MAX_WORDS):

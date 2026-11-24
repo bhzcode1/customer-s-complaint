@@ -305,8 +305,26 @@ spot-checking some rows by hand would strengthen it.
   unrecognised accounts `incorrect_information` where the gold says `not_mine_identity_theft`.
 - So the student's ceiling on these two fields is set by schema clarity more than by model size.
 
-**Still to do:** decide whether to tighten the issue/resolution definitions (prompt v2, relabel
-val, ~1 h on Kaggle) before labelling train (~3.5 h).
+**Prompt v2** (decided 2026-11-24: tighten before labelling train). In `schema.py`:
+- *Issue*: sharper descriptions plus a precedence order for complaints that fit several
+  categories (identity theft > unauthorized/scam > debt not owed > collection tactics > incorrect
+  information > merchant dispute > fees > payment > access > servicing > application > service
+  > other). `dispute_handling` now means a dispute with a merchant or seller only; an ignored
+  credit-report dispute is `incorrect_information`, a denied scam claim `unauthorized_transaction`.
+  `service_problem` is a last resort.
+- *Resolution*: only what the person explicitly asks for, now or earlier; a dispute or fraud
+  claim for money back counts as refund; asking only for an investigation, explanation or
+  documents is null; several asks -> refund > deletion > correction > stop_contact > other.
+- `PROMPT_VERSION = "v2"`. The gold set was re-checked against the written rules (27 issue and
+  31 resolution changes; v1 gold is in git history). Rows are marked "prompt v2 definitions".
+- Caveat: the rules mostly write down the conventions the gold annotator (Claude) had used, so the
+  gold and the prompt now share one definition. That is the point (a reference must match the
+  spec), but it is one annotator's reading; human spot-checks would show how far others agree.
+- v1 outputs kept as `data/labels/val_v1.jsonl` and `data/predictions/*_v1.jsonl`.
+  **v1 teacher vs v2 gold: issue 50.5%, resolution 46.5%** (the numbers v2 must beat).
+
+**Still to do:** relabel val with v2 on Kaggle (teacher + baselines, same notebook, ~1 h),
+score against gold, then label train (~3.5 h).
 
 ## Phase 4: Baselines and evaluation (started early, while labels are pending)
 
