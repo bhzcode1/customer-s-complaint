@@ -5,3 +5,4 @@ data/tmp/
 data/processed/
 data/labels/
 data/predictions/
+models/

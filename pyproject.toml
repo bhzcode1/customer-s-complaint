@@ -14,3 +14,13 @@ dependencies = [
 dev = [
     "pytest>=9.2.0",
 ]
+ml = [
+    "accelerate>=1.16.0",
+    "fastapi>=0.165.0",
+    "httpx>=0.28.1",
+    "matplotlib>=3.11.2",
+    "peft>=0.22.0",
+    "torch>=2.15.0",
+    "transformers>=5.24.0",
+    "uvicorn>=0.54.0",
+]
