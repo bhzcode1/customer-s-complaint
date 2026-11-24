@@ -266,8 +266,47 @@ uv run python label/gold.py annotate                      # resumable; Ctrl+C sa
 uv run python label/gold.py score data/labels/val.jsonl
 ```
 
-**Still to do:** run the notebook on val, hand-label the gold set, score the teacher on it
-(this sets the ceiling for the student), then label train.
+**Teacher run on val** (Kaggle, 2026-11-24): Qwen2.5-14B-Instruct-AWQ on T4 x2, 5,000 rows
+in 52 min (~1.6 rows/s; train's 20k would take ~3.5 h). Labels in `data/labels/val.jsonl`.
+- 4,771 valid at first (95.4%). **All 229 failures were `company: "XXXX"`**, and the retry
+  did not help: at temperature 0 the model repeats the same answer. Fix: `repair()` in
+  `teacher.py` turns a redacted or CFPB company into null (null *is* the schema's meaning for
+  "no name given") and notes the repair; `teacher.py --reparse FILE` re-parses saved raw answers
+  without calling the model. After it: 5,000/5,000 valid. Same rule applied to every model.
+- **Teacher vs CFPB product: only 62.5% agree** (credit_reporting 94%, mortgage 84%, bank 80%;
+  debt_collection 53%, personal_loan 47%, other 4%). Reading the disagreements, most are a
+  *definition* gap, not teacher errors: the CFPB product is what the consumer filed under, the
+  teacher answers what the text is about. E.g. "LVNV is reporting a debt to the credit bureaus"
+  is filed as debt collection; the teacher says credit_reporting. Some are real teacher errors
+  (Cash App -> bank_account, Earnin cash advance -> money_transfer). The prompt never defines the
+  groups, and `other` (debt settlement, credit management) is almost never chosen.
+- **Decision (2026-11-24): `product_group` = the CFPB's filed product.** The student learns it
+  from the CFPB's own label, which is exact, free and known for every complaint; the teacher's
+  product answer is not used. Schema and prompt are unchanged (so no relabelling). The training
+  data takes product from the CFPB, the gold-set tool fills it in instead of asking, and product
+  is scored only against the CFPB. (The one gold row labelled before this says `vehicle_loan`;
+  the CFPB says `credit_card`. Its product is no longer scored.)
+
+**Gold set** (2026-11-24): 200 val rows in `data/gold/val_gold.jsonl`. 1 row labelled by hand;
+**199 labelled by Claude (Opus 5.5), blind**: from the complaint text alone (cut at 600 words,
+as the teacher sees it), never shown the teacher's answers, following the prompt's field
+definitions. Each such row carries `"annotator": "claude (blind, from text only)"` and a note
+where the call was ambiguous (~60 rows). It is a second-model reference, not human ground truth;
+spot-checking some rows by hand would strengthen it.
+
+**Teacher vs gold** (n=200): company 88.5%, contacted 86.5%, amount 84.5% (has) / 94.4% (none),
+**issue 52.0% (macro-F1 44.4%), resolution 52.0%**. The two low fields are mostly definition gaps:
+- *Resolution*: the gold uses null unless the person explicitly asks for something (85 of 200);
+  the teacher infers what they seem to want (null only 13 times). "Null if they do not ask for
+  anything specific" allows both readings; this explains 72 of 96 disagreements. Another 12 are
+  deletion vs correction for credit-report items, which overlap.
+- *Issue*: disagreements spread over many pairs. The 13 categories overlap; the teacher uses
+  `service_problem` (26 vs gold 6) and `payment_problem` (21 vs 11) as catch-alls, and calls
+  unrecognised accounts `incorrect_information` where the gold says `not_mine_identity_theft`.
+- So the student's ceiling on these two fields is set by schema clarity more than by model size.
+
+**Still to do:** decide whether to tighten the issue/resolution definitions (prompt v2, relabel
+val, ~1 h on Kaggle) before labelling train (~3.5 h).
 
 ## Phase 4: Baselines and evaluation (started early, while labels are pending)
 
@@ -281,17 +320,45 @@ uv run python label/gold.py score data/labels/val.jsonl
   resolution by ordered regex rules, company from a list of ~55 common names, first `{$...}`
   amount, "I called/wrote/disputed..." for contacted. `tests/test_eval.py`: 3 tests.
 
-**Results so far** (val, 5,000 rows, 2026-11-23)
+**Results** (val, 2026-11-24). Product vs the CFPB's own label; every other column is
+agreement with the teacher (14B) labels, so the teacher scores 100% there by definition. Its
+real accuracy needs the gold set (1 of 200 rows labelled so far).
 
-| Baseline | product_group accuracy vs CFPB | macro-F1 |
-|---|---|---|
-| rules | 51.2% | 50.9% |
+| Model | Product vs CFPB | Issue (F1) | Company | Amount: has / none | Contacted | Resolution (F1) |
+|---|---|---|---|---|---|---|
+| (a) rules | 51.2% | 33.3% (26.8%) | 53.4% | 69.2% / 90.4% | 54.2% | 28.7% (28.2%) |
+| (b) Qwen2.5-0.5B, prompted | 19.4% | 25.6% (16.0%) | 67.2% | 71.6% / **49.4%** | 69.7% | 16.1% (11.1%) |
+| (b) Qwen2.5-1.5B, prompted* | 43.2% | 35.7% (22.8%) | 80.6% | 67.6% / 91.4% | 76.9% | 44.9% (35.1%) |
+| (c) teacher, Qwen2.5-14B | 62.5% | — | — | — | — | — |
 
-Other fields wait for the gold set and teacher labels.
+**Against the gold set** (200 val rows, labelled blind by Claude; see phase 3):
+
+| Model | Issue (F1) | Company | Amount: has / none | Contacted | Resolution (F1) |
+|---|---|---|---|---|---|
+| (a) rules | 34.0% (26.3%) | 53.0% | 77.6% / 88.7% | 58.0% | **61.5%** (44.7%) |
+| (b) Qwen2.5-0.5B, prompted | 23.0% (15.6%) | 71.5% | 72.4% / 42.3% | 64.0% | 12.5% (10.4%) |
+| (b) Qwen2.5-1.5B, prompted* | 26.9% (18.6%) | 79.0% | 77.6% / 86.4% | 73.7% | 38.9% (29.5%) |
+| (c) teacher, Qwen2.5-14B | **52.0%** (44.4%) | **88.5%** | **84.5% / 94.4%** | **86.5%** | 52.0% (52.8%) |
+
+The rules beat the teacher on resolution only because both default to null often, matching the
+gold's strict reading of that field (see phase 3).
+
+Product is the CFPB's filed product (phase 3 decision), so a fine-tuned student trained on it
+should beat every row here on that column; the prompted models were asked for the text's topic.
+
+\* The 1.5B Kaggle run stopped at 4,260 of 5,000 rows; its scores cover those rows only.
+n = 5,000 (1,752 with an amount per the teacher, 3,248 without).
 
 **Findings**
-- **41% of val complaints contain a dollar amount** (rules found one in 2,044 of 5,000), against
-  22% over all years in phase 1. The "has amount" group is larger in recent data.
+- **Prompting alone is not enough for a small model.** The 0.5B is worse than the rules on almost
+  every field and invents an amount for half the complaints that have none (49.4% on "no amount").
+  The 1.5B beats the rules on company, contacted and resolution, but not on product or issue.
+  This is the gap fine-tuning has to close.
+- **14% of the 0.5B's and 36% of the 1.5B's answers needed the company repair** (they write
+  "XXXX"), against 4.6% for the teacher.
+- **Most val complaints that contain a dollar amount are not about it**: the rules found an
+  amount in 2,044 rows (41%, against 22% over all years in phase 1), the teacher marked an
+  amount in dispute in 1,752 (35%).
 - The rules leave `company` null in 66% of rows: names outside the list are missed, so this is a
   weak floor for that field.
 
@@ -307,7 +374,7 @@ It runs in the Kaggle notebook (minutes on a T4; ~22 hours on this laptop's CPU)
 any gap after fine-tuning is due to training, not prompt changes. The two sizes also inform the
 phase 5 choice of student.
 
-**Still to do:** run baseline (b); baseline (c), the teacher itself vs gold; the comparison table.
+**Still to do:** finish the 1.5B run (740 rows).
 
 ## Roadmap: phases 3 to 10 (planned, not built yet)
 

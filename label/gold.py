@@ -18,7 +18,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).parent))
-from schema import FIELDS, ISSUES, PRODUCT_GROUPS, RESOLUTIONS, company_key, validate  # noqa: E402
+from schema import FIELDS, ISSUES, RESOLUTIONS, company_key, validate  # noqa: E402
 from teacher import MAX_WORDS, truncate  # noqa: E402
 
 ROOT = Path(__file__).parent.parent
@@ -64,7 +64,12 @@ def field_match(field, pred, gold):
     return pred == gold
 
 
-def score(pred, gold):
+# product_group is defined as the CFPB's filed product (decided 2026-11-24), known for every
+# row, so it is scored against the CFPB data directly (eval/evaluate.py), not against labels.
+SCORED_FIELDS = [f for f in FIELDS if f != "product_group"]
+
+
+def score(pred, gold, fields=SCORED_FIELDS):
     """pred, gold: complaint_id -> label. Returns {metric: (correct, total)}.
     Amount is scored separately for 'has amount' and 'no amount' rows (NOTES, phase 1):
     with ~78% nulls, an always-null model would otherwise look good."""
@@ -75,7 +80,7 @@ def score(pred, gold):
         res["valid_label"][1] += 1
         if p is None:
             continue
-        for f in FIELDS:
+        for f in fields:
             key = f
             if f == "amount_in_dispute":
                 key = f"{f} (has amount)" if g[f] is not None else f"{f} (no amount)"
@@ -126,11 +131,11 @@ def annotate():
     GOLD.parent.mkdir(parents=True, exist_ok=True)
     for n, (cid, group, text) in enumerate(todo, len(done) + 1):
         print("\n" + "=" * 100)
-        print(f"[{n}/{len(rows)}] complaint {cid}   (CFPB product group: {group})\n")
+        print(f"[{n}/{len(rows)}] complaint {cid}   (product_group from CFPB: {group})\n")
         print(truncate(" ".join(text.split()), MAX_WORDS))  # exactly what the teacher sees
         print()
         label = {
-            "product_group": ask_choice("product_group", PRODUCT_GROUPS, False),
+            "product_group": group,  # the CFPB's filed product, by definition (not asked)
             "issue": ask_choice("issue", list(ISSUES), False),
             "company": input("  company (as written, blank = null/redacted): ").strip() or None,
             "amount_in_dispute": ask_amount(),

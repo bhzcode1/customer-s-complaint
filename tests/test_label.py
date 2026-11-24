@@ -95,6 +95,7 @@ def test_score_splits_amount_and_counts_missing():
          "2": {**GOOD, "amount_in_dispute": None}}  # "3" has no valid teacher label
     s = gold.score(p, g)
     assert s["valid_label"] == (2, 3)
+    assert "product_group" not in s  # scored against the CFPB product, not labels
     assert s["company"] == (2, 2) and s["issue"] == (1, 2)
     assert s["amount_in_dispute (has amount)"] == (1, 1)
     assert s["amount_in_dispute (no amount)"] == (1, 1)
@@ -117,3 +118,25 @@ def test_latest_labels_keeps_newest_valid(tmp_path):
              {"complaint_id": "2", "label": GOOD, "model": "x"}]
     path.write_text("\n".join(json.dumps(r) for r in lines))
     assert gold.latest_labels(path, "m") == {"1": {**GOOD, "issue": "other"}}
+
+
+def test_parse_repairs_redacted_company():
+    for company in ["XXXX", "XXXX XXXX", "CFPB"]:
+        label, notes = teacher.parse(json.dumps({**GOOD, "company": company}))
+        assert label is not None and label["company"] is None
+        assert notes and notes[0].startswith("repaired")
+    assert teacher.parse(json.dumps(GOOD))[1] == []  # nothing to repair
+    assert teacher.parse(json.dumps({**GOOD, "issue": "bad"}))[0] is None  # other errors still fail
+
+
+def test_reparse_fixes_saved_failures_once(tmp_path):
+    out = tmp_path / "val.jsonl"
+    bad = json.dumps({**GOOD, "company": "XXXX"})
+    recs = [{"complaint_id": "1", "label": None, "errors": ["bad company"], "raw": bad, "model": "m",
+             "prompt_version": teacher.PROMPT_VERSION},
+            {"complaint_id": "2", "label": None, "errors": ["x"], "raw": "{oops", "model": "m",
+             "prompt_version": teacher.PROMPT_VERSION}]
+    out.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    assert teacher.reparse(out) == 1
+    assert teacher.reparse(out) == 0  # already fixed: nothing appended twice
+    assert teacher.done_ids(out, "m") == {"1"}

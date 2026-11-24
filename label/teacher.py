@@ -5,6 +5,7 @@ llama.cpp / Ollama on the laptop for a smoke test. Output is append-only JSONL, 
 per complaint, so an interrupted run (cloud sessions time out) resumes where it stopped.
 
 Run:
+  uv run python label/teacher.py --reparse data/labels/val.jsonl   # after parse() changes; no model
   uv run python label/teacher.py --split val --limit 20 \
       --base-url http://localhost:8000/v1 --model <model-name>
 """
@@ -21,7 +22,7 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).parent))
-from schema import FIELDS, ISSUES, JSON_SCHEMA, PRODUCT_GROUPS, RESOLUTIONS, normalise, validate  # noqa: E402
+from schema import ISSUES, JSON_SCHEMA, NOT_COMPANIES, PRODUCT_GROUPS, RESOLUTIONS, normalise, validate  # noqa: E402
 
 ROOT = Path(__file__).parent.parent
 PROCESSED = ROOT / "data" / "processed"
@@ -73,14 +74,49 @@ def chat(base_url, model, narrative, timeout=300):
         return json.load(r)["choices"][0]["message"]["content"]
 
 
+def repair(label):
+    """Fix answers whose meaning is unambiguous; returns notes on what changed.
+    A redacted company ("XXXX") or the CFPB means "no company named", which is null by the
+    schema's definition. Models write it anyway, and at temperature 0 a retry repeats it
+    (14B teacher on val: 229 of 5,000 rows), so it is fixed here instead of re-asked."""
+    notes = []
+    c = label.get("company") if isinstance(label, dict) else None
+    if isinstance(c, str) and (c.replace("X", "").strip() == "" or c.strip().lower() in NOT_COMPANIES):
+        label["company"] = None
+        notes.append(f"repaired: company {c!r} -> null")
+    return notes
+
+
 def parse(raw):
-    """raw answer -> (label or None, errors)."""
+    """raw answer -> (label or None, notes). Notes are the validation errors when the label is
+    None, and the repairs made (if any) when it is valid."""
     try:
         label = json.loads(raw)
     except (json.JSONDecodeError, TypeError) as e:
         return None, [f"invalid JSON: {e}"]
+    repairs = repair(label)
     errors = validate(label)
-    return (None if errors else normalise(label)), errors
+    return (None, errors) if errors else (normalise(label), repairs)
+
+
+def reparse(path):
+    """Parse the saved raw answers of failed rows again (after parse() changed), appending the
+    rows that are now valid. No model calls. Returns the number of rows fixed."""
+    recs = [json.loads(line) for line in open(path, encoding="utf-8")]
+    have = {(r["complaint_id"], r["model"], r["prompt_version"]) for r in recs if r["label"] is not None}
+    fixed = []
+    for r in recs:
+        key = (r["complaint_id"], r["model"], r["prompt_version"])
+        if r["label"] is None and r["raw"] is not None and key not in have:
+            label, notes = parse(r["raw"])
+            if label is not None:
+                fixed.append({**r, "label": label, "errors": notes, "reparsed": True,
+                              "created": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+                have.add(key)
+    with open(path, "a", encoding="utf-8") as f:
+        for r in fixed:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return len(fixed)
 
 
 def label_one(complaint_id, narrative, ask, model, tries=2):
@@ -130,14 +166,21 @@ def run(rows, out, ask, model, workers=8):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--split", choices=["train", "val"], required=True)
+    p.add_argument("--reparse", type=Path, metavar="JSONL",
+                   help="only re-parse the saved raw answers of failed rows in this file (no model)")
+    p.add_argument("--split", choices=["train", "val"])
     p.add_argument("--base-url", default="http://localhost:8000/v1")
-    p.add_argument("--model", required=True)
+    p.add_argument("--model")
     p.add_argument("--limit", type=int, help="label only the first N rows (smoke test)")
     p.add_argument("--workers", type=int, default=8, help="parallel requests; vLLM batches them")
     p.add_argument("--out", type=Path, help="output file (default data/labels/<split>.jsonl); "
                    "use a separate file for smoke tests")
     a = p.parse_args()
+    if a.reparse:
+        print(f"{reparse(a.reparse):,} failed rows now valid -> appended to {a.reparse}")
+        return
+    if not (a.split and a.model):
+        p.error("--split and --model are required unless --reparse is given")
 
     sql = f"SELECT complaint_id, narrative FROM '{(PROCESSED / f'{a.split}.parquet').as_posix()}' ORDER BY complaint_id"
     rows = duckdb.sql(sql + (f" LIMIT {a.limit}" if a.limit else "")).fetchall()
