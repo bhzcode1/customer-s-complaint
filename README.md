@@ -38,6 +38,7 @@ is split **by date**, so evaluation looks like deployment:
 | 1 | Download narratives, data-quality gate | `data/check_data.py` |
 | 2 | Clean, dedupe, date split, sample | `data/prep.py` |
 | 3 | Label schema; teacher labels (Qwen2.5-14B on a free Kaggle GPU); 200-row gold set | `label/`, `notebooks/label_kaggle.ipynb` |
+| 5 (full) | Student on the 20k train labels, free Kaggle GPU | `notebooks/train_kaggle.ipynb` |
 | 4 | Evaluation harness; baselines (rules, prompted small models, teacher) | `eval/` |
 | 5 | LoRA fine-tuning of the student | `train/train_lora.py` |
 | 6 | Error analysis | `eval/errors.py` |

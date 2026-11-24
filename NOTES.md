@@ -559,6 +559,12 @@ student faithfully inherits that. Fixing definitions (prompt v2) comes before sc
 Monitoring catches the 2026 shift clearly, and a truth signal (the CFPB product) shows it is the
 world that changed, not the model.
 
+**Prepared for the full run:** `train_lora.py` and `predict.py` use a GPU when present
+(gradient checkpointing on CUDA so 1.5B fits in fp32 on a T4); `notebooks/train_kaggle.ipynb`
+trains the student on `train.jsonl` and scores it on the gold set. **Blocked here:** no GPU and
+no Kaggle API token on this machine; with `~/.kaggle/kaggle.json` both notebooks can be pushed and
+their outputs pulled from this laptop.
+
 **Next steps (need a GPU):** relabel val and train with prompt v2 on Kaggle; train a 0.5-1.5B
 student on the 20k train labels; quantise with GGUF; re-run phases 6-9 with the same scripts.
 

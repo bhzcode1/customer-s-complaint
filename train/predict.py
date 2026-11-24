@@ -42,6 +42,8 @@ class Student:
             self.model = AutoPeftModelForCausalLM.from_pretrained(path, dtype=torch.float32).merge_and_unload()
         else:
             self.model = AutoModelForCausalLM.from_pretrained(path, dtype=torch.float32)
+        self.device = "cuda" if torch.cuda.is_available() and not int8 else "cpu"
+        self.model.to(self.device)
         if int8:  # phase 7: dynamic int8 quantisation of the linear layers, CPU only
             self.model = torch.ao.quantization.quantize_dynamic(self.model, {torch.nn.Linear}, dtype=torch.qint8)
         self.model.eval()
@@ -50,7 +52,7 @@ class Student:
     @torch.inference_mode()
     def raw(self, narrative):
         prompt = self.tok.apply_chat_template(messages(narrative), tokenize=False, add_generation_prompt=True)
-        ids = self.tok(prompt, return_tensors="pt", add_special_tokens=False)
+        ids = self.tok(prompt, return_tensors="pt", add_special_tokens=False).to(self.device)
         out = self.model.generate(**ids, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
                                   pad_token_id=self.tok.eos_token_id)
         return self.tok.decode(out[0, ids["input_ids"].shape[1]:], skip_special_tokens=True).strip()

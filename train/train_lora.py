@@ -68,8 +68,12 @@ def main():
         data = data[:a.n_train]
     print(f"{len(data):,} training examples from {a.labels}", flush=True)
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     tok = AutoTokenizer.from_pretrained(a.model)
-    model = AutoModelForCausalLM.from_pretrained(a.model, dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(a.model, dtype=torch.float32).to(device)
+    if device == "cuda":
+        model.gradient_checkpointing_enable()  # fits 1.5B in fp32 on a 16 GB T4
+        model.enable_input_require_grads()
     model = get_peft_model(model, LoraConfig(
         r=a.rank, lora_alpha=2 * a.rank, lora_dropout=0.05, task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]))
@@ -91,7 +95,7 @@ def main():
         if i % len(order) == 0:
             random.shuffle(order)
         ids, labels = encoded[order[i % len(order)]]
-        loss = model(input_ids=ids[None], labels=labels[None]).loss
+        loss = model(input_ids=ids[None].to(device), labels=labels[None].to(device)).loss
         if not torch.isfinite(loss):  # safety net: never let one bad example poison the weights
             print(f"skipping example {order[i % len(order)]}: loss {loss.item()}", flush=True)
             continue
@@ -116,7 +120,7 @@ def main():
     tok.save_pretrained(a.out / "adapter")
     cfg = {**{k: str(v) if isinstance(v, Path) else v for k, v in vars(a).items()},
            "examples_seen": i + 1, "minutes": round((time.time() - start) / 60, 1),
-           "torch": torch.__version__}
+           "torch": torch.__version__, "device": device}
     (a.out / "config.json").write_text(json.dumps(cfg, indent=2))
     print("saved", a.out, cfg, flush=True)
 
