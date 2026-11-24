@@ -5,6 +5,11 @@
    runtime): on-disk/in-memory size, seconds per complaint, and agreement on the same rows.
 3. Report hardware time per 1,000 complaints, the unit to compare with the teacher.
 
+Result for the 135M pilot (2026-11-24): int8 dynamic quantisation broke the model (0/30 valid
+outputs, also with lm_head kept in fp32) and was slower than fp32 on this CPU, so the service
+runs fp32. torch.ao dynamic quantisation is also deprecated; for a larger student use a dedicated
+runtime (GGUF Q8/Q4 with llama.cpp) and re-check validity before switching.
+
 Run: uv run --group ml python train/package.py --adapter models/pilot/adapter --rows 30
 """
 

@@ -6,3 +6,4 @@ data/processed/
 data/labels/
 data/predictions/
 models/
+data/logs/

@@ -46,6 +46,12 @@ label/lengths.py     phase 3: token counts for the length cap
 label/gold.py        phase 3: blind hand-labelling of 200 val rows + scoring against them
 data/gold/           val_gold.jsonl, hand labels (in git: small and not reproducible)
 notebooks/label_kaggle.ipynb  phase 3: full labelling run with vLLM on a free Kaggle GPU
+train/               phase 5-7: SFT data, LoRA training, prediction, packaging
+serve/app.py         phase 8: FastAPI service with request log
+monitor/             phase 9: replay through the service, drift report, reference mix
+reports/             error analyses, drift report and chart
+models/              adapters and merged models (not in git)
+MODEL_CARD.md        phase 10: model card
 eval/rules.py        phase 4: keyword/regex baseline
 eval/evaluate.py     phase 4: scores any predictions file
 data/predictions/    model and baseline outputs, JSONL (not in git)
@@ -53,9 +59,10 @@ tests/               pytest tests
 NOTES.md             this file
 ```
 
-**Status (2026-11-23).** Phases 1 and 2 are done. Phase 3 is in progress: schema, labelling
-script and length cap are done; the full labelling run and gold set are not. The plan for
-phases 3 to 10 is at the end of this file.
+**Status (2026-11-24).** All ten phases are built and run end to end. Phases 5-9 ran as a
+**CPU pilot** (135M student on 1,600 teacher-labelled val rows) because this machine has no GPU;
+the full-scale steps (teacher labels for train with prompt v2, a 0.5-1.5B student) are ready in
+`notebooks/label_kaggle.ipynb` and `train/train_lora.py`. README.md has the summary and results.
 
 ## Phase 1: Setup and data check (gate)
 
@@ -210,7 +217,7 @@ val 170, replay 188 (p90 about 450 in all three).
 mixes the same period's templates into train and test and inflates the score; a date split,
 plus keeping the earliest copy of any duplicate in train, measures what happens after deployment.
 
-## Phase 3: Schema and labels (in progress)
+## Phase 3: Schema and labels (val labelled; train needs the GPU run)
 
 **What was built so far**
 - `label/schema.py`: the six label fields, a JSON Schema for constrained output, and `validate()`,
@@ -326,7 +333,7 @@ spot-checking some rows by hand would strengthen it.
 **Still to do:** relabel val with v2 on Kaggle (teacher + baselines, same notebook, ~1 h),
 score against gold, then label train (~3.5 h).
 
-## Phase 4: Baselines and evaluation (started early, while labels are pending)
+## Phase 4: Baselines and evaluation
 
 **What was built so far**
 - `eval/evaluate.py`: scores a predictions JSONL (same format as the teacher's labels).
@@ -394,7 +401,168 @@ phase 5 choice of student.
 
 **Still to do:** finish the 1.5B run (740 rows).
 
-## Roadmap: phases 3 to 10 (planned, not built yet)
+## Phase 5: Fine-tuning (CPU pilot)
+
+**Why a pilot.** The plan was a 0.5-1.5B student trained on teacher labels for the 20k train rows,
+on a free cloud GPU. This machine has no GPU and no Kaggle credentials, so (decision 2026-11-24)
+the pipeline was completed end to end at pilot scale on the CPU; the full run is one notebook away.
+
+**What was built**
+- `train/sft_data.py`: chat examples = short fixed instruction + complaint (same 600-word cut as
+  the teacher) + target JSON in fixed key order. `product_group` from the CFPB, not the teacher.
+  The student gets no field definitions: after training they are in the weights, and leaving
+  them out keeps inputs ~3x shorter.
+- `train/train_lora.py`: LoRA (r=16 on all attention and MLP projections), loss on the JSON
+  tokens only, fixed seed, config and loss log saved with the adapter.
+- `train/predict.py`: greedy decoding, answers through the teacher's `parse()` (same repair and
+  schema check), output in the teacher's JSONL format.
+
+**Decisions**
+- **Model: SmolLM2-135M-Instruct.** Benchmarked 16 examples: ~8-13 s per example on this 2-core
+  CPU for 135M; 360M and Qwen2.5-0.5B would be ~3-4x slower (days for a useful amount of data).
+- **Data: 1,600 of the 5,000 val rows with 14B teacher labels (prompt v1)**, gold rows excluded.
+  Train has no teacher labels yet. Consequences, stated plainly: the test rows (gold) come from
+  the same period as the training rows (no time gap, unlike the design), and the student learns
+  the v1 definitions of issue and resolution while the gold uses v2.
+- **Bug found and fixed:** the first benchmark hit a NaN loss. A 1,252-token example was cut at
+  `max_len`, which removed the whole JSON target, so there was nothing to learn from. The complaint
+  is now shortened instead of the target, and a non-finite loss is skipped, never applied.
+- Settings: 1 epoch, lr 3e-4, effective batch 8 (200 steps), max 768 tokens.
+
+**Run** (2026-11-24): 1,600 examples in 160 min on CPU, loss 1.22 -> ~0.1. Adapter 19 MB.
+
+**Results on the gold set** (200 rows; product vs CFPB):
+
+| Model | Valid | Product | Issue (F1) | Company | Amount has / none | Contacted | Resolution (F1) |
+|---|---|---|---|---|---|---|---|
+| rules | 100% | 52.0% | 34.0% (24.2) | 53.0% | 77.6% / 88.7% | 58.0% | 61.5% (39.0) |
+| Qwen2.5-1.5B prompted (v1)* | 83.5% | 40.7% | 26.9% (17.8) | 79.0% | 77.6% / 86.4% | 73.7% | 38.9% (29.4) |
+| **student, SmolLM2-135M pilot** | **99.0%** | 51.5% | 27.3% (18.2) | 79.3% | 81.0% / 90.7% | 75.3% | 26.3% (26.5) |
+| teacher, Qwen2.5-14B (v1) | 100% | 60.0% | 50.5% (41.1) | 88.5% | 84.5% / 94.4% | 86.5% | 46.5% (46.2) |
+
+\* incomplete run (167 of 200 gold rows).
+
+## Phase 6: Error analysis (pilot)
+
+`eval/errors.py` writes `reports/errors_<file>.md` (confusions per field, examples with text).
+Reading the student's errors gives three causes:
+1. **Inherited definitions (largest, resolution).** The student never answers null and uses
+   `correction`/`other` heavily, exactly like its v1 teacher labels: 60 of its 146 resolution
+   errors are gold-null -> correction/other. Agreement with its *teacher* on the same rows is 57%
+   vs 26% with the gold: it copied the teacher, the teacher used the old definition.
+2. **Capacity and data (issue, product).** Issue agreement with the teacher is only 42%, so the
+   135M model with 1,600 examples did not learn the 13-way issue well. Product errors sit on the
+   known ambiguous pairs (personal_loan -> credit_card 10, debt_collection -> credit_reporting 9,
+   `other` 14).
+3. **Extraction fields are close to the teacher**: company 79% (teacher 88.5%), amount 81% /
+   91% (84.5% / 94%), contacted 75% (86.5%), valid JSON 99%.
+
+**Decision: no second CPU run.** The biggest cause can only be fixed by v2 teacher labels, which
+need the GPU; retraining on the same v1 labels for another 2.7 h cannot change it. The fix path:
+`notebooks/label_kaggle.ipynb` with SPLIT=val then train (prompt v2), then `train_lora.py` on a
+GPU with a 0.5-1.5B model and the 20k train labels.
+
+**Interview question**
+"Your student scores 26% on resolution but agrees 57% with its teacher. What does that tell you?"
+That the student learned what it was taught. The gap to the gold is a label-definition problem
+upstream, so the fix is better labels, not a bigger student or more epochs.
+
+## Phase 7: Packaging and inference (pilot)
+
+`train/package.py` merges the adapter into the base weights (`models/pilot/merged`, one
+self-contained directory) and times fp32 vs int8 on 30 gold rows.
+
+| Variant | Size | s / complaint | CPU-hours / 1,000 | Valid output |
+|---|---|---|---|---|
+| fp32 (merged) | 513 MB | 6.4 | 1.8 | 30/30 |
+| int8 dynamic (PyTorch) | 237 MB | 9.2 | 2.6 | **0/30** |
+
+- **int8 broke the model** (and was slower on this CPU). Keeping `lm_head` in fp32 did not help:
+  the output turned into unrelated JSON or free text. A 135M model has little redundancy, and
+  `torch.ao` dynamic quantisation is deprecated. Decision: serve fp32. For the full-size student,
+  quantise with a dedicated runtime (GGUF Q8/Q4 via llama.cpp) and check validity before switching.
+- **Cost comparison.** Student: 1.8 CPU-hours per 1,000 complaints on a 2-core 2017 laptop CPU, no
+  GPU. Teacher: ~0.35 T4 GPU-hours per 1,000 (5,000 rows in 52 min on two T4s), plus a 14B model
+  to host. The small model's advantage is where it runs, not raw speed on this hardware; batching
+  (one complaint at a time here) and a quantised runtime would cut the student's time a lot.
+
+## Phase 8: Service
+
+`serve/app.py` (FastAPI): `POST /extract` and `GET /health`. One request at a time (the model is
+not thread-safe on CPU); invalid output is retried once, then returned as `label: null` with the
+reason. Every request is appended to `data/logs/requests.jsonl` with received date, input length,
+latency, attempts, validity and the label: the input to phase 9. `tests/test_serve.py` (3 tests,
+fake model) covers logging, the retry and the null fallback.
+
+## Phase 9: Replay monitoring (distribution shift)
+
+**What was built**
+- `monitor/replay.py`: sends 2026 complaints through `serve/app.py` in received order (in-process,
+  or to a running server with `--url`), so the log is written by the production code path.
+- `monitor/drift.py`: monthly product mix (PSI vs reference), input length, valid rate, null
+  rates, and product accuracy against the CFPB's product (a lagging check: in production that truth
+  arrives later). Alert rules are fixed in `RULES` before looking at results. Output:
+  `reports/drift.md` and `reports/drift.png`.
+- `monitor/reference.json`: the reference is the **natural** traffic of Jan 2023 to Jun 2025
+  (1.95M complaints, credit reporting 75%, median 108 words), not train/val, which are balanced on
+  purpose and so have no real mix. Stored in git so the monitor runs without the raw file.
+
+**Decisions**
+- 100 random complaints per month (600 total), not all 10,000: ~6 s per request on this CPU.
+  Random within a month keeps each month's real mix; 100 is above the 30-row minimum per alert.
+- Two PSIs: on the model's answers (what production can see immediately) and on the CFPB's true
+  product (replay only). The second shows whether a shift is real or the model's own errors.
+
+**Results** (2026-11-24, pilot student; full table in `reports/drift.md`)
+
+| Month | PSI (model) | PSI (truth) | credit_reporting (truth) | Product acc. | Median words | Valid |
+|---|---|---|---|---|---|---|
+| 2026-01 | 2.27 | 3.74 | 2% | 67.7% | 164 | 99% |
+| 2026-03 | 2.09 | 4.30 | 1% | 67.0% | 176 | 100% |
+| 2026-06 | 2.05 | 7.93 | 0% | 64.6% | 202 | 99% |
+
+- **The monitor flags the shift every month (RETRAIN, PSI ~2 vs threshold 0.25)**, as expected
+  from phase 2: credit reporting falls from 75% of reference traffic to 0-2% in 2026.
+- The model-based PSI understates the true shift (it still answers credit_reporting for 9-16% of
+  requests, from other groups), but stays far above the threshold, so the alarm is right either way.
+- **Complaints keep getting longer**: median 164 -> 223 words (+52% to +106% vs reference), a
+  "watch" alert every month: more tokens per request, more of them cut at 600 words.
+- Valid output 98-100% in every month; latency ~5.4-6.0 s median, rising with length.
+- Product accuracy on replay (57-68%) is higher than on the balanced gold set (51.5%): the natural
+  2026 mix is dominated by debt collection and cards, which the student gets right more often. The
+  accuracy rule (drop >10 points) did not fire.
+- `requested_resolution` is never null (0% every month): the v1-label habit from phase 6, visible
+  in production logs without any ground truth.
+
+**Retraining rule** (what would happen in production): a RETRAIN alert two months in a row ->
+label a fresh sample of recent complaints with the teacher, add it to training, retrain, and
+re-score on the gold set before switching models.
+
+**Interview question**
+"Your product-mix PSI is 2.3. Is the model broken or did the world change?" Compare against a
+truth signal when one exists (here the CFPB product, PSI 3.7-7.9 with credit reporting at 0-2%):
+the world changed. Without truth, look at validity and confidence-like signals first; a broken
+model usually shows invalid output or collapsed answers before it shows a mix shift.
+
+## Phase 10: Wrap-up
+
+- `README.md`: problem, data, pipeline, results table, how to run, limits.
+- `MODEL_CARD.md`: intended use, training data and period, evaluation, known weaknesses
+  (category fields, same-period evaluation, redaction, truncation, 2026 shift, int8), next steps.
+- Repo checked from a fresh clone: `uv sync`, `uv sync --group ml`, `uv run pytest` (no data needed).
+
+**What the project shows, in one paragraph.** A 135M model fine-tuned for 2.7 hours on a laptop
+CPU produces valid JSON 99% of the time and comes close to a 14B teacher on fields it copies from
+the text, but not on judgement fields. The bigger lesson came from the gold set: the teacher's
+agreement on issue and resolution (~50%) was limited by how the labels were defined, and a
+student faithfully inherits that. Fixing definitions (prompt v2) comes before scaling the model.
+Monitoring catches the 2026 shift clearly, and a truth signal (the CFPB product) shows it is the
+world that changed, not the model.
+
+**Next steps (need a GPU):** relabel val and train with prompt v2 on Kaggle; train a 0.5-1.5B
+student on the 20k train labels; quantise with GGUF; re-run phases 6-9 with the same scripts.
+
+## Roadmap: phases 3 to 10 (original plan, kept for reference)
 
 Drafted 2026-11-22 from the findings above. The original plan was not saved in this repo, so
 this is a proposal: change it as decisions are made. Each phase gets its full notes section

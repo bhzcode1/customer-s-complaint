@@ -113,6 +113,8 @@ def alerts(month_stats, ref, ref_accuracy=None):
             continue
         p = psi(s["product_mix"], ref["product_mix"])
         s["psi_product"] = p
+        if s["true_mix"]:  # replay only: is the shift real, or the model's own errors?
+            s["psi_true"] = psi(s["true_mix"], ref["product_mix"])
         if p > RULES["psi_product_major"]:
             out.append((m, "RETRAIN", f"product mix PSI {p:.2f} > {RULES['psi_product_major']}"))
         elif p > RULES["psi_product_moderate"]:
@@ -152,14 +154,15 @@ def report(stats, ref, found, ref_accuracy, out_dir=REPORTS):
 
     lines = ["# Replay drift report", "",
              f"Reference: natural traffic {ref['period'][0]} to {ref['period'][1]} ({ref['rows']:,} complaints), "
-             f"median {ref['words_median']:.0f} words." + (f" Product accuracy on val: {ref_accuracy:.1%}." if ref_accuracy else ""),
+             f"median {ref['words_median']:.0f} words, credit_reporting {ref['product_mix']['credit_reporting']:.0%} of complaints." + (f" Product accuracy on val: {ref_accuracy:.1%}." if ref_accuracy else ""),
              "", "![drift](drift.png)", "",
-             "| Month | Rows | Valid | PSI product | Product acc. | Median words | Latency p50 (ms) | Null: company / amount / contacted / resolution |",
-             "|---|---|---|---|---|---|---|---|"]
+             "| Month | Rows | Valid | PSI product (model) | PSI product (CFPB truth) | credit_reporting share (truth) | Product acc. | Median words | Latency p50 (ms) | Null: company / amount / contacted / resolution |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for m, s in stats.items():
         n = s["null_rate"]
         acc = f"{s['product_accuracy']:.1%}" if s["product_accuracy"] is not None else "-"
-        lines.append(f"| {m} | {s['rows']} | {s['valid_rate']:.1%} | {s.get('psi_product', float('nan')):.2f} | {acc} | "
+        lines.append(f"| {m} | {s['rows']} | {s['valid_rate']:.1%} | {s.get('psi_product', float('nan')):.2f} | "
+                     f"{s.get('psi_true', float('nan')):.2f} | {s['true_mix'].get('credit_reporting', 0):.0%} | {acc} | "
                      f"{s['words_median']} | {s['latency_ms_median']} | {n['company']:.0%} / {n['amount_in_dispute']:.0%} / "
                      f"{n['contacted_company_first']:.0%} / {n['requested_resolution']:.0%} |")
     lines += ["", "## Alerts", ""] + ([f"- **{lvl}** {m}: {msg}" for m, lvl, msg in found] or ["- none"])
